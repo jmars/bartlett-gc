@@ -1,0 +1,3 @@
+[submodule "cproc-compiler"]
+	path = cproc-compiler
+	url = https://github.com/michaelforney/cproc.git
