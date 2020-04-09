@@ -7,6 +7,6 @@ garbage collector.
 
 ## Novelties
 * test program compiles using [cproc](https://github.com/michaelforney/cproc), a nice and minimal c compiler.
-* the binary is only 20kb and does 10 million allocations in 400ms on my i7
+* the binary is only 20kb and does 10 million allocations in 90ms on my i7
 * the entire thing is only ~350 lines of code
 * this style of GC is used in javascriptcore
