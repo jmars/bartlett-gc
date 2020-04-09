@@ -1,5 +1,25 @@
 #include "gc.h"
 
+uintptr_t firstheappage;
+uintptr_t lastheappage;
+uintptr_t heappages;
+uintptr_t freewords;
+uintptr_t *freep;
+uintptr_t allocatedpages;
+uintptr_t freepage;
+uintptr_t *space;
+uintptr_t *link;
+uintptr_t *type;
+uintptr_t queue_head;
+uintptr_t queue_tail;
+uintptr_t current_space;
+uintptr_t next_space;
+uintptr_t globals;
+
+uintptr_t *stackbase;
+
+GCP *globalp;
+
 uintptr_t next_page(uintptr_t page)
 {
   if (page == lastheappage)
@@ -70,10 +90,6 @@ void promote_page(uintptr_t page)
     allocatedpages = allocatedpages + 1;
     queue(page);
   }
-}
-
-uintptr_t register_value(uintptr_t reg) {
-  return zzReadRegister(reg);
 }
 
 void collect() {
@@ -189,13 +205,6 @@ void allocatepage(uintptr_t pages) {
   exit(1);
 }
 
-struct gc_state {
-  char * heap;
-  uintptr_t * space;
-  uintptr_t * link;
-  uintptr_t * type;
-};
-
 struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_ptr) 
 {
   char *heap_start;
@@ -268,9 +277,9 @@ void gcfree(struct gc_state state) {
   free(state.type);
 }
 
-GCP gcalloc(uintptr_t bytes, uintptr_t pointers) {
-  uintptr_t words;
-  uintptr_t i;
+GCP gcalloc(int bytes, int pointers) {
+  int words;
+  int i;
   GCP object;
 
   words = (bytes + WORDBYTES - 1) / WORDBYTES + 1;
@@ -299,31 +308,4 @@ GCP gcalloc(uintptr_t bytes, uintptr_t pointers) {
   }
 
   return object;
-}
-
-struct symbol {
-  struct symbol * next;
-  char name[10];
-};
-
-int main() {
-  uintptr_t stack_root;
-  // use a small heap size to force many collections
-  struct gc_state gcs = gcinit(4096, &stack_root, NULL);
-
-  struct symbol * sp = (struct symbol*)gcalloc(sizeof(struct symbol), 1);
-  strncpy(sp->name, "test\0", 5);
-  char test[5];
-  strncpy(test, sp->name, 5);
-  printf(test);
-
-  // run 10 million allocations to stress the garbage collector
-  for (size_t i = 0; i < 10000000; i++) {
-    struct symbol * sp2 = (struct symbol*)gcalloc(sizeof(struct symbol), 1);
-    sp->next = sp2;
-    sp = sp2;
-  }
-
-  gcfree(gcs);
-  return 0;
 }

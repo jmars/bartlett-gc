@@ -3,29 +3,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern int zzReadRegister(int registerId);
+volatile extern uintptr_t register_value(uintptr_t registerId);
 
 typedef uintptr_t *GCP;
 
-uintptr_t firstheappage;
-uintptr_t lastheappage;
-uintptr_t heappages;
-uintptr_t freewords;
-uintptr_t *freep;
-uintptr_t allocatedpages;
-uintptr_t freepage;
-uintptr_t *space;
-uintptr_t *link;
-uintptr_t *type;
-uintptr_t queue_head;
-uintptr_t queue_tail;
-uintptr_t current_space;
-uintptr_t next_space;
-uintptr_t globals;
+extern uintptr_t firstheappage;
+extern uintptr_t lastheappage;
+extern uintptr_t heappages;
+extern uintptr_t freewords;
+extern uintptr_t *freep;
+extern uintptr_t allocatedpages;
+extern uintptr_t freepage;
+extern uintptr_t *space;
+extern uintptr_t *link;
+extern uintptr_t *type;
+extern uintptr_t queue_head;
+extern uintptr_t queue_tail;
+extern uintptr_t current_space;
+extern uintptr_t next_space;
+extern uintptr_t globals;
 
-uintptr_t *stackbase;
+extern uintptr_t *stackbase;
 
-GCP *globalp;
+extern GCP *globalp;
 
 #define OBJECT 0
 #define CONTINUED 1
@@ -47,4 +47,14 @@ GCP *globalp;
 #define FIRST_REGISTER 0
 #define LAST_REGISTER 15
 
-GCP gcalloc(uintptr_t bytes, uintptr_t pointers);
+
+struct gc_state {
+  char * heap;
+  uintptr_t * space;
+  uintptr_t * link;
+  uintptr_t * type;
+};
+
+struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_ptr);
+void gcfree(struct gc_state state);
+GCP gcalloc(int bytes, int pointers);

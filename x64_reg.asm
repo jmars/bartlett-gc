@@ -1,7 +1,7 @@
 SECTION .TEXT
-	GLOBAL zzReadRegister
+	GLOBAL register_value
 
-zzReadRegister:
+register_value:
 	cmp rdi, 0
 	je zzReg0
 	cmp rdi, 1
