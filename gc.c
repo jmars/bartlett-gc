@@ -1,24 +1,24 @@
 #include "gc.h"
 
-uintptr_t firstheappage;
-uintptr_t lastheappage;
-uintptr_t heappages;
-uintptr_t freewords;
-uintptr_t *freep;
-uintptr_t allocatedpages;
-uintptr_t freepage;
-uintptr_t *space;
-uintptr_t *link;
-uintptr_t *type;
-uintptr_t queue_head;
-uintptr_t queue_tail;
-uintptr_t current_space;
-uintptr_t next_space;
-uintptr_t globals;
+static uintptr_t firstheappage;
+static uintptr_t lastheappage;
+static uintptr_t heappages;
+static uintptr_t freewords;
+static uintptr_t *freep;
+static uintptr_t allocatedpages;
+static uintptr_t freepage;
+static uintptr_t *space;
+static uintptr_t *link;
+static uintptr_t *type;
+static uintptr_t queue_head;
+static uintptr_t queue_tail;
+static uintptr_t current_space;
+static uintptr_t next_space;
+static uintptr_t globals;
 
-uintptr_t *stackbase;
+static uintptr_t *stackbase;
 
-GCP *globalp;
+static GCP *globalp;
 
 uintptr_t next_page(uintptr_t page)
 {

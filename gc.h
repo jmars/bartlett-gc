@@ -7,26 +7,6 @@ volatile extern uintptr_t register_value(uintptr_t registerId);
 
 typedef uintptr_t *GCP;
 
-extern uintptr_t firstheappage;
-extern uintptr_t lastheappage;
-extern uintptr_t heappages;
-extern uintptr_t freewords;
-extern uintptr_t *freep;
-extern uintptr_t allocatedpages;
-extern uintptr_t freepage;
-extern uintptr_t *space;
-extern uintptr_t *link;
-extern uintptr_t *type;
-extern uintptr_t queue_head;
-extern uintptr_t queue_tail;
-extern uintptr_t current_space;
-extern uintptr_t next_space;
-extern uintptr_t globals;
-
-extern uintptr_t *stackbase;
-
-extern GCP *globalp;
-
 #define OBJECT 0
 #define CONTINUED 1
 
