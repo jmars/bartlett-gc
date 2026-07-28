@@ -225,6 +225,8 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   GCP *gp;
 
   heappages = heap_size / PAGEBYTES;
+  extra_root_start = NULL;
+  extra_root_size = 0;
   heap_start = malloc(heap_size + PAGEBYTES - 1);
   heap = heap_start;
 
