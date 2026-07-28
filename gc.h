@@ -25,11 +25,11 @@ typedef uintptr_t *GCP;
 #define PAGE_to_GCP(p) ((GCP)((p)*PAGEBYTES))
 #define GCP_to_PAGE(p) (((uintptr_t)p)/PAGEBYTES)
 
-#define MAKE_HEADER(words, ptrs) ((ptrs)<<17 | (words)<<1 | 1)
+#define MAKE_HEADER(words, ptrs) ((ptrs)<<25 | (words)<<1 | 1)
 #define FORWARDED(header) (((header) & 1) == 0)
-#define HEADER_PTRS(header) ((header)>>17 & 0x7FFF)
-#define HEADER_WORDS(header) ((header)>>1 & 0xFFFF)
-#define HEADER_BYTES(header) (((header)>>1 & 0xFFFF)*WORDBYTES)
+#define HEADER_PTRS(header) ((header)>>25 & 0xFFFFF)
+#define HEADER_WORDS(header) ((header)>>1 & 0xFFFFFF)
+#define HEADER_BYTES(header) (((header)>>1 & 0xFFFFFF)*WORDBYTES)
 
 #define STACKINC 8
 

@@ -20,8 +20,9 @@ static uintptr_t *stackbase;
 
 static GCP *globalp;
 
-static void *extra_root_start = NULL;
-static size_t extra_root_size = 0;
+#define MAX_EXTRA_ROOTS 8
+static struct { void *start; size_t size; } extra_roots[MAX_EXTRA_ROOTS];
+static int n_extra_roots = 0;
 
 uintptr_t next_page(uintptr_t page)
 {
@@ -35,6 +36,8 @@ void queue(uintptr_t page)
   if (queue_head != 0)
   {
     link[queue_tail] = page;
+    link[page] = 0;
+    queue_tail = page;
   }
   else
   {
@@ -100,6 +103,7 @@ void collect() {
   uintptr_t *fp;
   uintptr_t reg;
   uintptr_t cnt;
+  uintptr_t i;
   GCP cp;
   GCP pp;
 
@@ -129,9 +133,9 @@ void collect() {
     }
   #endif
 
-  if (extra_root_start && extra_root_size) {
-    uintptr_t *p = (uintptr_t *)extra_root_start;
-    uintptr_t *end = (uintptr_t *)((char *)extra_root_start + extra_root_size);
+  for (i = 0; i < n_extra_roots; i++) {
+    uintptr_t *p = (uintptr_t *)extra_roots[i].start;
+    uintptr_t *end = (uintptr_t *)((char *)extra_roots[i].start + extra_roots[i].size);
     for (; p < end; p++) {
       promote_page(GCP_to_PAGE(*p));
     }
@@ -146,13 +150,15 @@ void collect() {
   while (queue_head != 0) {
     cp = PAGE_to_GCP(queue_head);
     while (GCP_to_PAGE(cp) == queue_head && cp != freep) {
+      uintptr_t hw = HEADER_WORDS(*cp);
+      if (hw == 0 || hw > PAGEWORDS * 2) break;  /* false positive from stack */
       cnt = HEADER_PTRS(*cp);
       pp = cp + 1;
       while (cnt--) {
         *pp = (uintptr_t)move((GCP)*pp);
         pp = pp + 1;
       }
-      cp = cp + HEADER_WORDS(*cp);
+      cp = cp + hw;
     }
     queue_head = link[queue_head];
   }
@@ -167,7 +173,15 @@ void allocatepage(uintptr_t pages) {
 
   if (allocatedpages + pages >= heappages / 2) {
     collect();
-    return;
+    /* After collection, check again — if still too full, OOM */
+    if (allocatedpages + pages >= heappages / 2) {
+      fprintf(stderr,
+        "gcalloc - Out of memory: need %lu pages, live set is %lu pages "
+        "(semi-space capacity %lu pages)\n",
+        (unsigned long)pages, (unsigned long)allocatedpages,
+        (unsigned long)(heappages / 2));
+      exit(1);
+    }
   }
 
   free = 0;
@@ -225,8 +239,7 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   GCP *gp;
 
   heappages = heap_size / PAGEBYTES;
-  extra_root_start = NULL;
-  extra_root_size = 0;
+  n_extra_roots = 0;
   heap_start = malloc(heap_size + PAGEBYTES - 1);
   heap = heap_start;
 
@@ -247,6 +260,8 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   link = (link_ptr) - firstheappage;
   uintptr_t * type_ptr = (uintptr_t *)malloc(heappages * sizeof(uintptr_t));
   type = (type_ptr) - firstheappage;
+  /* Zero link[] to avoid stale queue entries causing cycles */
+  memset(link_ptr, 0, heappages * sizeof(uintptr_t));
   globals = 0;
   gp = &global_ptr;
 
@@ -292,8 +307,13 @@ void gcfree(struct gc_state state) {
 }
 
 void gc_set_extra_roots(void *start, size_t size) {
-  extra_root_start = start;
-  extra_root_size = size;
+  if (n_extra_roots >= MAX_EXTRA_ROOTS) {
+    fprintf(stderr, "gc_set_extra_roots: too many ranges (max %d)\n", MAX_EXTRA_ROOTS);
+    exit(1);
+  }
+  extra_roots[n_extra_roots].start = start;
+  extra_roots[n_extra_roots].size = size;
+  n_extra_roots++;
 }
 
 GCP gcalloc(int bytes, int pointers) {
@@ -302,6 +322,17 @@ GCP gcalloc(int bytes, int pointers) {
   GCP object;
 
   words = (bytes + WORDBYTES - 1) / WORDBYTES + 1;
+
+  if (words > 0xFFFFFF) {
+    fprintf(stderr,
+      "gcalloc: object too large for header (%d words, max %d)\n", words, 0xFFFFFF);
+    exit(1);
+  }
+  if (pointers > 0xFFFFF) {
+    fprintf(stderr,
+      "gcalloc: too many pointers for header (%d, max %d)\n", pointers, 0xFFFFF);
+    exit(1);
+  }
 
   while (words > freewords) {
     if (freewords != 0) {
