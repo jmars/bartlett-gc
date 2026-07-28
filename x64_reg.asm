@@ -1,4 +1,4 @@
-SECTION .TEXT
+section .text
 	GLOBAL register_value
 
 register_value:
