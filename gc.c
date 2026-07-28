@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include "gc.h"
+#include <sys/mman.h>
 
 static uintptr_t firstheappage;
 static uintptr_t lastheappage;
@@ -20,9 +22,146 @@ static uintptr_t *stackbase;
 
 static GCP *globalp;
 
+/* Raw allocation pointers — used for realloc/mremap during grow/shrink.
+   The heap buffer is mmap'd so mremap can extend it in-place without
+   moving the base (which would break the GCP_to_PAGE page-number scheme). */
+static char *raw_heap_start;
+static size_t heap_mmap_size;   /* current mmap size of the heap */
+static uintptr_t *raw_space_ptr;
+static uintptr_t *raw_link_ptr;
+static uintptr_t *raw_type_ptr;
+
 #define MAX_EXTRA_ROOTS 8
 static struct { void *start; size_t size; } extra_roots[MAX_EXTRA_ROOTS];
 static int n_extra_roots = 0;
+
+/* Minimum heap size: 16MB (32768 pages). Never shrink below this. */
+#define MIN_HEAP_PAGES 32768
+
+/* ---------- dynamic heap growth / shrinkage ---------- */
+
+static int grow_heap(uintptr_t pages_needed) {
+    uintptr_t new_heappages = heappages * 2;
+    size_t new_heap_size = new_heappages * PAGEBYTES;
+
+    /* Ensure enough for what we actually need */
+    uintptr_t min_needed = (allocatedpages + pages_needed + 512) * 2;
+    if (new_heappages < min_needed) {
+        new_heappages = min_needed;
+        new_heap_size = new_heappages * PAGEBYTES;
+    }
+
+    /* If the new size fits within the existing mmap, just expand the
+       logical page count — no mremap needed. */
+    if (new_heap_size + PAGEBYTES - 1 <= heap_mmap_size) {
+        /* Grow metadata arrays */
+        uintptr_t *new_space = realloc(raw_space_ptr, new_heappages * sizeof(uintptr_t));
+        uintptr_t *new_link  = realloc(raw_link_ptr,  new_heappages * sizeof(uintptr_t));
+        uintptr_t *new_type  = realloc(raw_type_ptr,  new_heappages * sizeof(uintptr_t));
+        if (!new_space || !new_link || !new_type) return -1;
+
+        raw_space_ptr = new_space;
+        raw_link_ptr  = new_link;
+        raw_type_ptr  = new_type;
+        space = new_space - firstheappage;
+        link  = new_link  - firstheappage;
+        type  = new_type  - firstheappage;
+
+        uintptr_t old_last = lastheappage;
+        lastheappage = firstheappage + new_heappages - 1;
+        heappages = new_heappages;
+        for (uintptr_t i = old_last + 1; i <= lastheappage; i++) {
+            space[i] = 0; link[i] = 0; type[i] = 0;
+        }
+
+        fprintf(stderr, "[gc] heap grown to %zu MB (%lu pages, live=%lu) [logical]\n",
+                new_heap_size / (1024 * 1024),
+                (unsigned long)new_heappages,
+                (unsigned long)allocatedpages);
+        return 0;
+    }
+
+    /* Need to extend the mmap.  mremap without MREMAP_MAYMOVE keeps
+       the base fixed. */
+    void *new_map = mremap(raw_heap_start, heap_mmap_size,
+                           new_heap_size + PAGEBYTES - 1, 0);
+    if (new_map == MAP_FAILED) {
+        fprintf(stderr, "[gc] grow: mremap failed for %zu MB\n",
+                new_heap_size / (1024 * 1024));
+        return -1;
+    }
+    raw_heap_start = new_map;
+    heap_mmap_size = new_heap_size + PAGEBYTES - 1;
+
+    /* Grow the auxiliary arrays */
+    uintptr_t *new_space = realloc(raw_space_ptr, new_heappages * sizeof(uintptr_t));
+    uintptr_t *new_link  = realloc(raw_link_ptr,  new_heappages * sizeof(uintptr_t));
+    uintptr_t *new_type  = realloc(raw_type_ptr,  new_heappages * sizeof(uintptr_t));
+    if (!new_space || !new_link || !new_type) return -1;
+
+    raw_space_ptr = new_space;
+    raw_link_ptr  = new_link;
+    raw_type_ptr  = new_type;
+
+    space = new_space - firstheappage;
+    link  = new_link  - firstheappage;
+    type  = new_type  - firstheappage;
+
+    /* Zero out the newly added pages */
+    uintptr_t old_last = lastheappage;
+    lastheappage = firstheappage + new_heappages - 1;
+    heappages = new_heappages;
+    for (uintptr_t i = old_last + 1; i <= lastheappage; i++) {
+        space[i] = 0; link[i] = 0; type[i] = 0;
+    }
+
+    fprintf(stderr, "[gc] heap grown to %zu MB (%lu pages, live=%lu)\n",
+            new_heap_size / (1024 * 1024),
+            (unsigned long)new_heappages,
+            (unsigned long)allocatedpages);
+    return 0;
+}
+
+static void shrink_heap(void) {
+    if (heappages <= MIN_HEAP_PAGES) return;
+    /* Only shrink if live data fits comfortably in half the current size */
+    if (allocatedpages * 4 > heappages) return;
+
+    uintptr_t new_heappages = heappages / 2;
+    if (new_heappages < MIN_HEAP_PAGES) new_heappages = MIN_HEAP_PAGES;
+    size_t new_heap_size = new_heappages * PAGEBYTES;
+
+    /* Don't mremap — keep the mmap at its peak size so we can
+       re-grow later without VAS conflicts.  Just shrink the logical
+       page count and realloc the metadata arrays smaller. */
+    uintptr_t *new_space = realloc(raw_space_ptr, new_heappages * sizeof(uintptr_t));
+    uintptr_t *new_link  = realloc(raw_link_ptr,  new_heappages * sizeof(uintptr_t));
+    uintptr_t *new_type  = realloc(raw_type_ptr,  new_heappages * sizeof(uintptr_t));
+
+    if (!new_space) new_space = raw_space_ptr;
+    if (!new_link)  new_link  = raw_link_ptr;
+    if (!new_type)  new_type  = raw_type_ptr;
+
+    raw_space_ptr = new_space;
+    raw_link_ptr  = new_link;
+    raw_type_ptr  = new_type;
+
+    space = new_space - firstheappage;
+    link  = new_link  - firstheappage;
+    type  = new_type  - firstheappage;
+
+    lastheappage = firstheappage + new_heappages - 1;
+    heappages = new_heappages;
+
+    /* Reset cursors that may point beyond the new heap boundary */
+    if (freepage > lastheappage) freepage = firstheappage;
+    freewords = 0;
+
+    fprintf(stderr, "[gc] heap shrunk to %zu MB (%lu pages, live=%lu)\n",
+            new_heap_size / (1024 * 1024),
+            (unsigned long)new_heappages,
+            (unsigned long)allocatedpages);
+}
 
 uintptr_t next_page(uintptr_t page)
 {
@@ -117,7 +256,7 @@ void collect() {
     freewords = 0;
   }
 
-  next_space = (current_space + 1) & 077777;
+  next_space = (current_space == 1) ? 2 : 1;
   allocatedpages = 0;
   queue_head = 0;
 
@@ -164,17 +303,28 @@ void collect() {
   }
 
   current_space = next_space;
+
+  /* Shrink only when the heap is dramatically oversized (4x live set)
+     and above a minimum threshold to avoid shrink-grow-fragment cycles. */
+  if (heappages > 262144 && allocatedpages * 4 <= heappages)
+    shrink_heap();
 }
 
 void allocatepage(uintptr_t pages) {
   uintptr_t free;
   uintptr_t firstpage;
   uintptr_t allpages;
+  int retried = 0;
 
+retry:
   if (allocatedpages + pages >= heappages / 2) {
     collect();
-    /* After collection, check again — if still too full, OOM */
+    /* After collection, check again.  If still too full, try to grow. */
     if (allocatedpages + pages >= heappages / 2) {
+      if (!retried && grow_heap(pages) == 0) {
+        retried = 1;
+        goto retry;
+      }
       fprintf(stderr,
         "gcalloc - Out of memory: need %lu pages, live set is %lu pages "
         "(semi-space capacity %lu pages)\n",
@@ -224,24 +374,39 @@ void allocatepage(uintptr_t pages) {
     }
   }
 
+  /* Scan exhausted — try growing (once) then retry */
+  if (!retried && grow_heap(pages) == 0) {
+    retried = 1;
+    goto retry;
+  }
+
   fprintf(stderr,
-          "gcalloc - Unable to allocate %d pages in a %d page heap\n",
-          pages, heappages);
+          "gcalloc - Unable to allocate %lu pages in a %lu page heap\n",
+          (unsigned long)pages, (unsigned long)heappages);
 
   exit(1);
 }
 
 struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_ptr) 
 {
-  char *heap_start;
   char *heap;
   uintptr_t i;
   GCP *gp;
 
   heappages = heap_size / PAGEBYTES;
   n_extra_roots = 0;
-  heap_start = malloc(heap_size + PAGEBYTES - 1);
-  heap = heap_start;
+  /* Reserve a larger mmap than the initial heap so we can grow logically
+     without mremap.  The extra VAS costs nothing on Linux (lazy commit). */
+  heap_mmap_size = (heap_size * 4 > (64ULL * 1024 * 1024))
+                     ? heap_size * 2 + PAGEBYTES - 1
+                     : 256 * 1024 * 1024 + PAGEBYTES - 1;
+  raw_heap_start = mmap(NULL, heap_mmap_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (raw_heap_start == MAP_FAILED) {
+    fprintf(stderr, "gcinit: mmap failed for %zu bytes\n", heap_mmap_size);
+    exit(1);
+  }
+  heap = raw_heap_start;
 
   if ((uintptr_t)heap & (PAGEBYTES - 1)) {
     heap = heap + (PAGEBYTES - ((uintptr_t)heap & (PAGEBYTES - 1)));
@@ -288,8 +453,13 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   allocatedpages = 0;
   queue_head = 0;
 
+  /* Save raw pointers for grow/shrink */
+  raw_space_ptr  = space_ptr;
+  raw_link_ptr   = link_ptr;
+  raw_type_ptr   = type_ptr;
+
   struct gc_state state = {
-    .heap = heap_start,
+    .heap = raw_heap_start,
     .space = space_ptr,
     .link = link_ptr,
     .type = type_ptr
@@ -300,10 +470,11 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
 
 // make valgrind happy
 void gcfree(struct gc_state state) {
-  free(state.heap);
-  free(state.space);
-  free(state.link);
-  free(state.type);
+  (void)state;
+  munmap(raw_heap_start, heap_mmap_size);
+  free(raw_space_ptr);
+  free(raw_link_ptr);
+  free(raw_type_ptr);
 }
 
 void gc_set_extra_roots(void *start, size_t size) {
