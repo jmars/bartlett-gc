@@ -48,11 +48,12 @@ GCP move(GCP cp)
   GCP np;
   GCP from;
   GCP to;
+  uintptr_t page;
 
-  if (cp == NULL || space[GCP_to_PAGE(cp)] == next_space)
-  {
-    return cp;
-  }
+  if (cp == NULL) return cp;
+  page = GCP_to_PAGE(cp);
+  if (page < firstheappage || page > lastheappage) return cp;
+  if (space[page] == next_space) return cp;
 
   header = cp[-1];
   if (FORWARDED(header))
@@ -80,7 +81,7 @@ void promote_page(uintptr_t page)
       page <= lastheappage &&
       space[page] == current_space)
   {
-    while (type[page] == CONTINUED)
+    while (page > firstheappage && type[page] == CONTINUED)
     {
       allocatedpages = allocatedpages + 1;
       space[page] = next_space;
@@ -128,7 +129,7 @@ void collect() {
   cnt = globals;
 
   while (cnt--) {
-    *globalp[cnt] = (uintptr_t)move(*globalp[cnt]);
+    *globalp[cnt] = (uintptr_t)move((GCP)*globalp[cnt]);
   }
 
   while (queue_head != 0) {
@@ -137,7 +138,7 @@ void collect() {
       cnt = HEADER_PTRS(*cp);
       pp = cp + 1;
       while (cnt--) {
-        *pp = (uintptr_t)move(*pp);
+        *pp = (uintptr_t)move((GCP)*pp);
         pp = pp + 1;
       }
       cp = cp + HEADER_WORDS(*cp);
