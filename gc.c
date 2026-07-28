@@ -20,6 +20,9 @@ static uintptr_t *stackbase;
 
 static GCP *globalp;
 
+static void *extra_root_start = NULL;
+static size_t extra_root_size = 0;
+
 uintptr_t next_page(uintptr_t page)
 {
   if (page == lastheappage)
@@ -125,6 +128,14 @@ void collect() {
       promote_page(GCP_to_PAGE(register_value(reg)));
     }
   #endif
+
+  if (extra_root_start && extra_root_size) {
+    uintptr_t *p = (uintptr_t *)extra_root_start;
+    uintptr_t *end = (uintptr_t *)((char *)extra_root_start + extra_root_size);
+    for (; p < end; p++) {
+      promote_page(GCP_to_PAGE(*p));
+    }
+  }
 
   cnt = globals;
 
@@ -248,7 +259,7 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
 
     while (i--) {
       globalp[i] = *gp;
-      **gp = NULL;
+      **gp = 0;
       gp = gp + 1;
     }
   }
@@ -278,6 +289,11 @@ void gcfree(struct gc_state state) {
   free(state.type);
 }
 
+void gc_set_extra_roots(void *start, size_t size) {
+  extra_root_start = start;
+  extra_root_size = size;
+}
+
 GCP gcalloc(int bytes, int pointers) {
   int words;
   int i;
@@ -296,7 +312,7 @@ GCP gcalloc(int bytes, int pointers) {
   *freep = MAKE_HEADER(words, pointers);
 
   for (i = 1; i <= pointers; i++) {
-    freep[i] = NULL;
+    freep[i] = 0;
   }
 
   object = freep + 1;

@@ -24,8 +24,6 @@ typedef uintptr_t *GCP;
 #define HEADER_BYTES(header) (((header)>>1 & 0xFFFF)*WORDBYTES)
 
 #define STACKINC 8
-#define FIRST_REGISTER 0
-#define LAST_REGISTER 15
 
 struct gc_state {
   char * heap;
@@ -37,5 +35,6 @@ struct gc_state {
 struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_ptr);
 void gcfree(struct gc_state state);
 GCP gcalloc(int bytes, int pointers);
+void gc_set_extra_roots(void *start, size_t size);
 
 #define GCALLOC(type, ptrs) ((struct type *)gcalloc(sizeof(struct type), ptrs))
