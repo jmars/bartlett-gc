@@ -395,9 +395,11 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   heappages = heap_size / PAGEBYTES;
   n_extra_roots = 0;
   /* Reserve a larger mmap than the initial heap so we can grow logically
-     without mremap.  The extra VAS costs nothing on Linux (lazy commit). */
-  heap_mmap_size = (heap_size * 8 > (256ULL * 1024 * 1024))
-                     ? heap_size * 2 + PAGEBYTES - 1
+     without mremap.  The extra VAS costs nothing on Linux (lazy commit).
+     Use at least 1 GB to give the heap room to grow through several
+     doublings before needing mremap. */
+  heap_mmap_size = (heap_size * 8 > (1024ULL * 1024 * 1024))
+                     ? heap_size * 8 + PAGEBYTES - 1
                      : 1024ULL * 1024 * 1024 + PAGEBYTES - 1;
   raw_heap_start = mmap(NULL, heap_mmap_size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
