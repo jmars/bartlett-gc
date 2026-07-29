@@ -304,9 +304,13 @@ void collect() {
 
   current_space = next_space;
 
-  /* Shrink disabled for now — realloc of space[] during shrink-grow
-     cycles appears to fragment page markings. */
-  /* shrink_heap(); */
+  /* Shrink heap when live set is comfortably small (< 25%).
+     This is critical: before shen.initialise returns, the C stack
+     contains many false-positive heap pointers that inflate the live
+     set; once those stack frames unwind, the real live set is tiny
+     (< 50 pages).  Without shrink, the heap stays bloated and
+     subsequent allocations push it past the mmap reservation. */
+  shrink_heap();
 }
 
 void allocatepage(uintptr_t pages) {
@@ -396,11 +400,13 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   n_extra_roots = 0;
   /* Reserve a larger mmap than the initial heap so we can grow logically
      without mremap.  The extra VAS costs nothing on Linux (lazy commit).
-     Use at least 1 GB to give the heap room to grow through several
-     doublings before needing mremap. */
-  heap_mmap_size = (heap_size * 8 > (1024ULL * 1024 * 1024))
-                     ? heap_size * 8 + PAGEBYTES - 1
-                     : 1024ULL * 1024 * 1024 + PAGEBYTES - 1;
+     Reserve 4 GB to give the heap room to grow through several doublings
+     (256MB → 512MB → 1GB → 2GB → 4GB) without needing mremap at all.
+     Even with conservative stack scan false positives inflating the live
+     set during deep call chains, 4GB is plenty of headroom. */
+  heap_mmap_size = (heap_size * 16 > (4096ULL * 1024 * 1024))
+                     ? heap_size * 16 + PAGEBYTES - 1
+                     : 4096ULL * 1024 * 1024 + PAGEBYTES - 1;
   raw_heap_start = mmap(NULL, heap_mmap_size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (raw_heap_start == MAP_FAILED) {
