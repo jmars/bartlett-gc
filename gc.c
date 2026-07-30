@@ -38,6 +38,26 @@ static int n_extra_roots = 0;
 /* Minimum heap size: 16MB (32768 pages). Never shrink below this. */
 #define MIN_HEAP_PAGES 32768
 
+/* ---------- Bartlett mostly-copying: pinned-page bitmap ---------- */
+static uint64_t *pinned_bits;
+static size_t   pinned_bits_words;
+
+static int page_is_pinned(uintptr_t page) {
+    if (!pinned_bits) return 0;
+    if (page < firstheappage || page > lastheappage) return 0;
+    size_t idx = page - firstheappage;
+    return (pinned_bits[idx / 64] >> (idx % 64)) & 1;
+}
+static void page_set_pinned(uintptr_t page) {
+    if (!pinned_bits) return;
+    if (page < firstheappage || page > lastheappage) return;
+    size_t idx = page - firstheappage;
+    pinned_bits[idx / 64] |= ((uint64_t)1 << (idx % 64));
+}
+static void pinned_clear_all(void) {
+    if (pinned_bits) memset(pinned_bits, 0, pinned_bits_words * 8);
+}
+
 /* ---------- dynamic heap growth / shrinkage ---------- */
 
 static int grow_heap(uintptr_t pages_needed) {
@@ -238,6 +258,31 @@ void promote_page(uintptr_t page)
   }
 }
 
+/* pin_page: like promote_page but marks pages as PINNED so move()
+ * won't copy them.  Objects on pinned pages stay at their original
+ * addresses — their space tag is set to next_space so move() returns
+ * the original pointer.  The pinned bitmap prevents allocatepage()
+ * from reusing these pages after a space swap. */
+void pin_page(uintptr_t page)
+{
+  if (page >= firstheappage &&
+      page <= lastheappage &&
+      space[page] == current_space)
+  {
+    while (page > firstheappage && type[page] == CONTINUED)
+    {
+      allocatedpages = allocatedpages + 1;
+      space[page] = next_space;
+      page_set_pinned(page);
+      page = page - 1;
+    }
+    space[page] = next_space;
+    allocatedpages = allocatedpages + 1;
+    page_set_pinned(page);
+    queue(page);
+  }
+}
+
 void collect() {
   uintptr_t *fp;
   uintptr_t reg;
@@ -259,16 +304,17 @@ void collect() {
   next_space = (current_space == 1) ? 2 : 1;
   allocatedpages = 0;
   queue_head = 0;
+  pinned_clear_all();
 
   for (fp = (uintptr_t *)(&fp);
        fp <= stackbase;
        fp = (uintptr_t *)(((char *)fp) + STACKINC))
   {
-    promote_page(GCP_to_PAGE(*fp));
+    pin_page(GCP_to_PAGE(*fp));
   }
   #ifdef FIRST_REGISTER
     for (reg = FIRST_REGISTER; reg <= LAST_REGISTER; reg++) {
-      promote_page(GCP_to_PAGE(register_value(reg)));
+      pin_page(GCP_to_PAGE(register_value(reg)));
     }
   #endif
 
@@ -276,7 +322,7 @@ void collect() {
     uintptr_t *p = (uintptr_t *)extra_roots[i].start;
     uintptr_t *end = (uintptr_t *)((char *)extra_roots[i].start + extra_roots[i].size);
     for (; p < end; p++) {
-      promote_page(GCP_to_PAGE(*p));
+      pin_page(GCP_to_PAGE(*p));
     }
   }
 
@@ -342,7 +388,8 @@ retry:
 
   while (allpages--) {
     if (space[freepage] != current_space &&
-        space[freepage] != next_space)
+        space[freepage] != next_space &&
+        !page_is_pinned(freepage))
     {
       if (free++ == 0) {
         firstpage = freepage;
@@ -465,6 +512,11 @@ struct gc_state gcinit(uintptr_t heap_size, uintptr_t *stack_base, GCP global_pt
   raw_link_ptr   = link_ptr;
   raw_type_ptr   = type_ptr;
 
+  /* Pinned-page bitmap: one bit per page in the mmap reservation */
+  pinned_bits_words = (heap_mmap_size / PAGEBYTES + 63) / 64;
+  pinned_bits = (uint64_t *)calloc(pinned_bits_words, 8);
+  if (!pinned_bits) { fprintf(stderr, "gcinit: pinned bitmap alloc failed\n"); exit(1); }
+
   struct gc_state state = {
     .heap = raw_heap_start,
     .space = space_ptr,
@@ -482,6 +534,7 @@ void gcfree(struct gc_state state) {
   free(raw_space_ptr);
   free(raw_link_ptr);
   free(raw_type_ptr);
+  free(pinned_bits);
 }
 
 void gc_set_extra_roots(void *start, size_t size) {
